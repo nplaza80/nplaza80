@@ -10,6 +10,8 @@ This tool never submits applications on your behalf. It helps you:
 You still review every draft and submit it yourself on the employer's site.
 """
 import argparse
+import html
+import itertools
 import json
 import os
 import sys
@@ -95,9 +97,12 @@ def cmd_add_job(args) -> None:
         "id": uuid.uuid4().hex[:8],
         "title": args.title or title,
         "company": args.company or "",
+        "location": "",
         "url": args.url or "",
         "description": description,
         "status": "new",
+        "source": "manual",
+        "source_id": None,
         "added_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "draft_resume_path": None,
@@ -107,6 +112,98 @@ def cmd_add_job(args) -> None:
     save_tracker(entries)
     print(f"Added job {entry['id']}: {entry['title']} ({entry['company'] or 'company unknown'})")
     print("Next: python apply.py draft " + entry["id"])
+
+
+ADZUNA_BASE_URL = "https://api.adzuna.com/v1/api/jobs"
+
+
+def adzuna_search(country: str, app_id: str, app_key: str, what: str, where: str | None, results: int) -> list:
+    import requests
+
+    params = {
+        "app_id": app_id,
+        "app_key": app_key,
+        "results_per_page": results,
+        "what": what,
+        "content-type": "application/json",
+    }
+    if where:
+        params["where"] = where
+    resp = requests.get(f"{ADZUNA_BASE_URL}/{country}/search/1", params=params, timeout=20)
+    resp.raise_for_status()
+    return resp.json().get("results", [])
+
+
+def cmd_search(args) -> None:
+    if not CONFIG_PATH.exists():
+        sys.exit("Run `python apply.py init` first, then fill in config.yaml.")
+    config = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+
+    app_id = os.environ.get("ADZUNA_APP_ID")
+    app_key = os.environ.get("ADZUNA_APP_KEY")
+    if not app_id or not app_key:
+        sys.exit(
+            "Set ADZUNA_APP_ID and ADZUNA_APP_KEY in your environment.\n"
+            "Get free credentials at https://developer.adzuna.com/"
+        )
+
+    roles = config.get("target_roles") or []
+    locations = config.get("locations") or [None]
+    if not roles:
+        sys.exit("Add at least one entry to target_roles in config.yaml.")
+
+    adzuna_cfg = config.get("adzuna") or {}
+    country = adzuna_cfg.get("country", "us")
+    results_per_query = args.limit or adzuna_cfg.get("results_per_search", 10)
+
+    queries = list(itertools.product(roles, locations))
+    if len(queries) > 20:
+        sys.exit(
+            f"{len(queries)} role/location combinations would be queried (roles x locations). "
+            "Trim target_roles or locations in config.yaml to 20 or fewer combinations."
+        )
+
+    entries = load_tracker()
+    existing_ids = {e["source_id"] for e in entries if e.get("source") == "adzuna" and e.get("source_id")}
+
+    added = 0
+    skipped = 0
+    for role, location in queries:
+        where = None if location == "Remote" else location
+        print(f"Searching Adzuna: '{role}' in '{location or 'anywhere'}' ...")
+        try:
+            results = adzuna_search(country, app_id, app_key, role, where, results_per_query)
+        except Exception as exc:  # noqa: BLE001 - surface API errors without crashing the whole run
+            print(f"  Skipped query due to error: {exc}")
+            continue
+
+        for r in results:
+            source_id = str(r.get("id"))
+            if not source_id or source_id in existing_ids:
+                skipped += 1
+                continue
+            entry = {
+                "id": uuid.uuid4().hex[:8],
+                "title": html.unescape(r.get("title", "")).strip(),
+                "company": html.unescape((r.get("company") or {}).get("display_name", "")).strip(),
+                "location": html.unescape((r.get("location") or {}).get("display_name", "")).strip(),
+                "url": r.get("redirect_url", ""),
+                "description": html.unescape(r.get("description", "")).strip(),
+                "status": "new",
+                "source": "adzuna",
+                "source_id": source_id,
+                "added_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "draft_resume_path": None,
+                "draft_cover_letter_path": None,
+            }
+            entries.append(entry)
+            existing_ids.add(source_id)
+            added += 1
+
+    save_tracker(entries)
+    print(f"\nAdded {added} new posting(s), skipped {skipped} already-tracked duplicate(s).")
+    print("Run `python apply.py list` to see them, `python apply.py draft <job_id>` to draft materials.")
 
 
 def build_prompt(config: dict, resume: str, job: dict) -> str:
@@ -194,7 +291,8 @@ def cmd_list(_args) -> None:
         print("No jobs tracked yet. Add one with `python apply.py add-job ...`.")
         return
     for e in entries:
-        print(f"{e['id']}  [{e['status']:12}]  {e['title']} @ {e.get('company') or '?'}")
+        loc = f" ({e['location']})" if e.get("location") else ""
+        print(f"{e['id']}  [{e['status']:12}]  {e['title']} @ {e.get('company') or '?'}{loc}  [{e.get('source', 'manual')}]")
 
 
 def cmd_update_status(args) -> None:
@@ -222,6 +320,12 @@ def main() -> None:
     p_add.add_argument("--title", help="Job title (optional if scraped from URL).")
     p_add.add_argument("--company", help="Company name.")
     p_add.set_defaults(func=cmd_add_job)
+
+    p_search = sub.add_parser(
+        "search", help="Query Adzuna for postings matching target_roles/locations in config.yaml and track new ones."
+    )
+    p_search.add_argument("--limit", type=int, help="Results per role/location query (overrides config.yaml).")
+    p_search.set_defaults(func=cmd_search)
 
     p_draft = sub.add_parser("draft", help="Generate tailored resume highlights + cover letter for a job.")
     p_draft.add_argument("job_id")

@@ -19,3 +19,10 @@ preferences: |
 
 # Tone for the cover letter: "professional", "warm", "concise", etc.
 cover_letter_tone: "professional and concise"
+
+# Used by `python apply.py search` (Adzuna job search integration).
+# Get free API credentials at https://developer.adzuna.com/ and set them as
+# the ADZUNA_APP_ID / ADZUNA_APP_KEY environment variables (not here).
+adzuna:
+  country: "us"          # Adzuna country code: us, gb, ca, au, de, etc.
+  results_per_search: 10 # max results per role/location combination

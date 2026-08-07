@@ -30,6 +30,27 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## Usage
 
+### Auto-populate postings with Adzuna
+
+Get free API credentials at https://developer.adzuna.com/ and set:
+
+```bash
+export ADZUNA_APP_ID=...
+export ADZUNA_APP_KEY=...
+```
+
+Then, using the `target_roles`, `locations`, and `adzuna` settings in `config.yaml`:
+
+```bash
+python apply.py search               # queries every role x location combination
+python apply.py search --limit 5     # cap results per query
+```
+
+New postings are added to the tracker with status `new`; postings already tracked
+(matched by Adzuna's listing id) are skipped so re-running `search` is safe.
+
+### Add a posting manually
+
 Track a job posting (from a URL, or paste the description into a file):
 
 ```bash
