@@ -49,6 +49,46 @@ python apply.py search --limit 5     # cap results per query
 New postings are added to the tracker with status `new`; postings already tracked
 (matched by Adzuna's listing id) are skipped so re-running `search` is safe.
 
+### Importing from Indeed / LinkedIn
+
+Neither Indeed nor LinkedIn offers a public job-search API for individual
+developers anymore (Indeed deprecated its Publisher API for new access;
+LinkedIn's job APIs are partner-only), and this tool does **not** scrape
+either site directly — LinkedIn in particular prohibits automated access in
+its ToS and aggressively bans accounts for it.
+
+Instead, `import` ingests job listings from a JSON file, so you can bring in
+postings from any legitimate source (e.g. a Claude session with an Indeed
+connector enabled, an official employer API, or postings you've manually
+collected):
+
+```bash
+python apply.py import indeed_import.example.json --source indeed
+```
+
+Each file is a JSON array of objects (see `indeed_import.example.json`):
+
+```json
+[
+  {
+    "title": "Backend Engineer",
+    "company": "Acme Corp",
+    "location": "Remote",
+    "url": "https://...",
+    "description": "Full job description text...",
+    "source": "indeed",
+    "source_id": "unique-listing-id"
+  }
+]
+```
+
+`source` + `source_id` are used to dedupe re-imports (falls back to `url` if
+`source_id` is omitted), so running `import` again on an updated file is safe.
+
+For an individual LinkedIn posting, just copy its URL and use `add-job --url`
+below — that's a single page fetch of a listing you're already choosing to
+view, not automated scraping.
+
 ### Add a posting manually
 
 Track a job posting (from a URL, or paste the description into a file):

@@ -1,0 +1,11 @@
+[
+  {
+    "title": "Backend Engineer",
+    "company": "Acme Corp",
+    "location": "Remote",
+    "url": "https://www.indeed.com/viewjob?jk=examplejobkey123",
+    "description": "Full job description text goes here...",
+    "source": "indeed",
+    "source_id": "examplejobkey123"
+  }
+]

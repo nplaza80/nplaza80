@@ -114,6 +114,65 @@ def cmd_add_job(args) -> None:
     print("Next: python apply.py draft " + entry["id"])
 
 
+def cmd_import(args) -> None:
+    import_path = Path(args.file)
+    if not import_path.exists():
+        sys.exit(f"No such file: {import_path}")
+    try:
+        raw = json.loads(import_path.read_text())
+    except json.JSONDecodeError as exc:
+        sys.exit(f"Invalid JSON in {import_path}: {exc}")
+    if not isinstance(raw, list):
+        sys.exit("Import file must contain a JSON array of job objects.")
+
+    source_label = args.source or import_path.stem
+    entries = load_tracker()
+    existing_keys = {(e.get("source"), e.get("source_id")) for e in entries if e.get("source_id")}
+    existing_urls = {e["url"] for e in entries if e.get("url")}
+
+    added = 0
+    skipped = 0
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("title"):
+            skipped += 1
+            continue
+        source = item.get("source", source_label)
+        source_id = str(item["source_id"]) if item.get("source_id") is not None else None
+        url = item.get("url", "")
+        if source_id and (source, source_id) in existing_keys:
+            skipped += 1
+            continue
+        if not source_id and url and url in existing_urls:
+            skipped += 1
+            continue
+
+        entry = {
+            "id": uuid.uuid4().hex[:8],
+            "title": item["title"].strip(),
+            "company": (item.get("company") or "").strip(),
+            "location": (item.get("location") or "").strip(),
+            "url": url,
+            "description": item.get("description", ""),
+            "status": "new",
+            "source": source,
+            "source_id": source_id,
+            "added_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "draft_resume_path": None,
+            "draft_cover_letter_path": None,
+        }
+        entries.append(entry)
+        if source_id:
+            existing_keys.add((source, source_id))
+        if url:
+            existing_urls.add(url)
+        added += 1
+
+    save_tracker(entries)
+    print(f"Imported {added} new posting(s) from {import_path.name}, skipped {skipped} (invalid or already-tracked).")
+    print("Run `python apply.py list` to see them, `python apply.py draft <job_id>` to draft materials.")
+
+
 ADZUNA_BASE_URL = "https://api.adzuna.com/v1/api/jobs"
 
 
@@ -320,6 +379,14 @@ def main() -> None:
     p_add.add_argument("--title", help="Job title (optional if scraped from URL).")
     p_add.add_argument("--company", help="Company name.")
     p_add.set_defaults(func=cmd_add_job)
+
+    p_import = sub.add_parser(
+        "import",
+        help="Import job postings from a JSON file (e.g. results fetched via an Indeed/LinkedIn tool).",
+    )
+    p_import.add_argument("file", help="Path to a JSON file containing a list of job objects.")
+    p_import.add_argument("--source", help="Label to tag these postings with (defaults to the filename).")
+    p_import.set_defaults(func=cmd_import)
 
     p_search = sub.add_parser(
         "search", help="Query Adzuna for postings matching target_roles/locations in config.yaml and track new ones."
