@@ -3,9 +3,10 @@
 Job application drafting assistant.
 
 This tool never submits applications on your behalf. It helps you:
-  1. Track job postings you're interested in.
-  2. Draft a tailored resume summary + cover letter per posting (via Claude).
-  3. Keep a status tracker (new -> drafted -> applied -> interviewing -> ...).
+  1. Track job postings you're interested in (search, add, or import).
+  2. Screen each one against your job_fit_scoring rubric in config.yaml (via Claude).
+  3. Draft a tailored resume summary + cover letter per posting (via Claude).
+  4. Keep a status tracker (new -> screened -> drafted -> applied -> interviewing -> ...).
 
 You still review every draft and submit it yourself on the employer's site.
 """
@@ -14,6 +15,7 @@ import html
 import itertools
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -27,7 +29,31 @@ RESUME_PATH = BASE_DIR / "resume.md"
 TRACKER_PATH = BASE_DIR / "applications.json"
 DRAFTS_DIR = BASE_DIR / "drafts"
 
-VALID_STATUSES = ["new", "drafted", "applied", "interviewing", "rejected", "offer"]
+VALID_STATUSES = ["new", "screened", "drafted", "applied", "interviewing", "rejected", "offer"]
+
+
+def get_target_roles(config: dict, tiers: list) -> list:
+    """target_roles can be a flat list, or a dict of tiers (primary/stretch/adjacent/...)."""
+    target = config.get("target_roles")
+    if isinstance(target, dict):
+        roles = []
+        for tier in tiers:
+            roles.extend(target.get(tier) or [])
+        return roles
+    return target or []
+
+
+def get_locations(config: dict) -> list:
+    """locations can be a flat list, or a dict with a 'preferred' list."""
+    locations = config.get("locations")
+    if isinstance(locations, dict):
+        return locations.get("preferred") or [None]
+    return locations or [None]
+
+
+def is_role_avoided(title: str, avoid_roles: list) -> bool:
+    lowered = title.lower()
+    return any(isinstance(term, str) and term.lower() in lowered for term in avoid_roles)
 
 
 def load_tracker() -> list:
@@ -103,6 +129,7 @@ def cmd_add_job(args) -> None:
         "status": "new",
         "source": "manual",
         "source_id": None,
+        "screening": None,
         "added_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "draft_resume_path": None,
@@ -110,8 +137,14 @@ def cmd_add_job(args) -> None:
     }
     entries.append(entry)
     save_tracker(entries)
+
+    if CONFIG_PATH.exists():
+        config = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+        if is_role_avoided(entry["title"], config.get("avoid_roles") or []):
+            print(f"Note: '{entry['title']}' matches an entry in avoid_roles - added anyway since you added it directly.")
+
     print(f"Added job {entry['id']}: {entry['title']} ({entry['company'] or 'company unknown'})")
-    print("Next: python apply.py draft " + entry["id"])
+    print("Next: python apply.py screen " + entry["id"])
 
 
 def cmd_import(args) -> None:
@@ -156,6 +189,7 @@ def cmd_import(args) -> None:
             "status": "new",
             "source": source,
             "source_id": source_id,
+            "screening": None,
             "added_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "draft_resume_path": None,
@@ -170,7 +204,7 @@ def cmd_import(args) -> None:
 
     save_tracker(entries)
     print(f"Imported {added} new posting(s) from {import_path.name}, skipped {skipped} (invalid or already-tracked).")
-    print("Run `python apply.py list` to see them, `python apply.py draft <job_id>` to draft materials.")
+    print("Run `python apply.py list` to see them, `python apply.py screen --all` to score them.")
 
 
 ADZUNA_BASE_URL = "https://api.adzuna.com/v1/api/jobs"
@@ -206,10 +240,16 @@ def cmd_search(args) -> None:
             "Get free credentials at https://developer.adzuna.com/"
         )
 
-    roles = config.get("target_roles") or []
-    locations = config.get("locations") or [None]
+    tiers = ["primary"]
+    if args.include_stretch:
+        tiers.append("stretch")
+    if args.include_adjacent:
+        tiers.append("adjacent")
+    roles = get_target_roles(config, tiers)
+    locations = get_locations(config)
+    avoid_roles = config.get("avoid_roles") or []
     if not roles:
-        sys.exit("Add at least one entry to target_roles in config.yaml.")
+        sys.exit("Add at least one entry to target_roles (or target_roles.primary) in config.yaml.")
 
     adzuna_cfg = config.get("adzuna") or {}
     country = adzuna_cfg.get("country", "us")
@@ -219,7 +259,7 @@ def cmd_search(args) -> None:
     if len(queries) > 20:
         sys.exit(
             f"{len(queries)} role/location combinations would be queried (roles x locations). "
-            "Trim target_roles or locations in config.yaml to 20 or fewer combinations."
+            "Trim target_roles or locations in config.yaml, or drop --include-stretch/--include-adjacent."
         )
 
     entries = load_tracker()
@@ -227,6 +267,7 @@ def cmd_search(args) -> None:
 
     added = 0
     skipped = 0
+    avoided = 0
     for role, location in queries:
         where = None if location == "Remote" else location
         print(f"Searching Adzuna: '{role}' in '{location or 'anywhere'}' ...")
@@ -241,9 +282,14 @@ def cmd_search(args) -> None:
             if not source_id or source_id in existing_ids:
                 skipped += 1
                 continue
+            title = html.unescape(r.get("title", "")).strip()
+            if is_role_avoided(title, avoid_roles):
+                avoided += 1
+                existing_ids.add(source_id)
+                continue
             entry = {
                 "id": uuid.uuid4().hex[:8],
-                "title": html.unescape(r.get("title", "")).strip(),
+                "title": title,
                 "company": html.unescape((r.get("company") or {}).get("display_name", "")).strip(),
                 "location": html.unescape((r.get("location") or {}).get("display_name", "")).strip(),
                 "url": r.get("redirect_url", ""),
@@ -251,6 +297,7 @@ def cmd_search(args) -> None:
                 "status": "new",
                 "source": "adzuna",
                 "source_id": source_id,
+                "screening": None,
                 "added_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "draft_resume_path": None,
@@ -261,17 +308,20 @@ def cmd_search(args) -> None:
             added += 1
 
     save_tracker(entries)
-    print(f"\nAdded {added} new posting(s), skipped {skipped} already-tracked duplicate(s).")
-    print("Run `python apply.py list` to see them, `python apply.py draft <job_id>` to draft materials.")
+    print(f"\nAdded {added} new posting(s), skipped {skipped} duplicate(s), filtered {avoided} matching avoid_roles.")
+    print("Run `python apply.py list` to see them, `python apply.py screen --all` to score them.")
 
 
 def build_prompt(config: dict, resume: str, job: dict) -> str:
+    config_yaml = yaml.safe_dump(config, sort_keys=False, width=100, allow_unicode=True)
     return f"""You are helping a job applicant prepare application materials. You are NOT submitting
 anything - you are only drafting text for the applicant to review and edit.
 
-CANDIDATE PREFERENCES:
-{config.get('preferences', '')}
-Tone for cover letter: {config.get('cover_letter_tone', 'professional')}
+CANDIDATE PROFILE, STRATEGY, VOICE, AND GUARDRAILS (YAML). Follow this closely, especially any
+truthfulness_rules, resume_strategy, cover_letter_strategy, and personal_brand_voice sections:
+---
+{config_yaml}
+---
 
 CANDIDATE RESUME:
 ---
@@ -287,13 +337,13 @@ Produce two things, clearly separated by the exact markers below:
 
 ===RESUME_SUMMARY===
 A tailored 3-5 bullet "highlights" section (not a full resume rewrite) that reorders/reframes
-the candidate's real, existing experience to match this specific posting. Do not invent
-experience, skills, or metrics that aren't in the resume above.
+the candidate's real, existing experience to match this specific posting, per any resume_strategy
+above. Do not invent experience, skills, or metrics that aren't in the resume above.
 
 ===COVER_LETTER===
-A concise cover letter (under 350 words) addressed generically ("Dear Hiring Team," unless a
-name is given), referencing specific, real details from both the resume and the job posting.
-Do not invent facts.
+A cover letter following any cover_letter_strategy/personal_brand_voice above (default to
+under 350 words if no length guidance is given), referencing specific, real details from both
+the resume and the job posting. Do not invent facts.
 """
 
 
@@ -344,6 +394,107 @@ def cmd_draft(args) -> None:
     print("Review and edit these before you submit anything yourself.")
 
 
+def build_screen_prompt(config: dict, resume: str, job: dict) -> str:
+    config_yaml = yaml.safe_dump(config, sort_keys=False, width=100, allow_unicode=True)
+    return f"""You are screening a job posting for a candidate against their profile, strategy, and
+fit-scoring rubric below. You are NOT applying or submitting anything - only assessing fit.
+
+CANDIDATE PROFILE, STRATEGY, AND FIT-SCORING RUBRIC (YAML). Apply job_fit_scoring, avoid_roles,
+application_priority, education_handling, experience_strategy, and truthfulness_rules exactly:
+---
+{config_yaml}
+---
+
+CANDIDATE RESUME:
+---
+{resume}
+---
+
+JOB POSTING ({job.get('title', 'Unknown role')} at {job.get('company', 'Unknown company')}):
+---
+{job.get('description', '')[:8000]}
+---
+
+Respond with ONLY a single JSON object (no markdown code fences, no commentary before or after)
+with exactly these keys:
+
+{{
+  "fit_score": <integer 0-100, per job_fit_scoring>,
+  "recommendation": "PRIORITIZE" | "APPLY" | "MAYBE" | "SKIP",
+  "why_it_fits": "<string>",
+  "gaps_or_risks": "<string>",
+  "degree_assessment": "<string, per education_handling>",
+  "technical_assessment": "<string, per technical_positioning>",
+  "remote_assessment": "<string, per work_arrangement>",
+  "resume_positioning_angle": "<string>",
+  "top_experiences": ["<string>", "..."],
+  "interview_narrative": "<string>",
+  "advances_director_track": "<string>"
+}}
+
+Never reject an otherwise strong match solely for missing 100% of listed qualifications - separate
+true disqualifiers (e.g. avoid_roles matches, misrepresented remote status, hard credential
+requirements) from employer wish-list items, per any rejection_rule/scoring_rules above.
+"""
+
+
+def cmd_screen(args) -> None:
+    if not CONFIG_PATH.exists() or not RESUME_PATH.exists():
+        sys.exit("Run `python apply.py init` first, then fill in config.yaml and resume.md.")
+    config = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+    resume = RESUME_PATH.read_text()
+
+    entries = load_tracker()
+    if args.all:
+        targets = [e for e in entries if args.force or e.get("status") == "new"]
+        if not targets:
+            print("Nothing to screen (no jobs with status 'new'; pass --force to re-screen everything).")
+            return
+    else:
+        if not args.job_id:
+            sys.exit("Provide a job_id, or use --all to screen every job with status 'new'.")
+        entry = next((e for e in entries if e["id"] == args.job_id), None)
+        if entry is None:
+            sys.exit(f"No job with id {args.job_id}. Run `python apply.py list` to see ids.")
+        targets = [entry]
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        sys.exit("Set ANTHROPIC_API_KEY in your environment to screen jobs.")
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    for entry in targets:
+        print(f"Screening {entry['id']}: {entry['title']} @ {entry.get('company') or '?'} ...")
+        prompt = build_screen_prompt(config, resume, entry)
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(block.text for block in response.content if block.type == "text").strip()
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            print(f"  Could not parse a response for {entry['id']}; leaving unscreened.")
+            continue
+        try:
+            result = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            print(f"  Could not parse a response for {entry['id']}; leaving unscreened.")
+            continue
+
+        entry["screening"] = result
+        if entry["status"] == "new":
+            entry["status"] = "screened"
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        print(f"  Fit score: {result.get('fit_score')}  Recommendation: {result.get('recommendation')}")
+
+    save_tracker(entries)
+    print("\nRun `python apply.py list` to see scores, `python apply.py draft <job_id>` for strong fits.")
+
+
 def cmd_list(_args) -> None:
     entries = load_tracker()
     if not entries:
@@ -351,7 +502,11 @@ def cmd_list(_args) -> None:
         return
     for e in entries:
         loc = f" ({e['location']})" if e.get("location") else ""
-        print(f"{e['id']}  [{e['status']:12}]  {e['title']} @ {e.get('company') or '?'}{loc}  [{e.get('source', 'manual')}]")
+        screening = e.get("screening") or {}
+        fit = ""
+        if screening.get("fit_score") is not None:
+            fit = f"  fit={screening['fit_score']}/{screening.get('recommendation', '?')}"
+        print(f"{e['id']}  [{e['status']:12}]  {e['title']} @ {e.get('company') or '?'}{loc}  [{e.get('source', 'manual')}]{fit}")
 
 
 def cmd_update_status(args) -> None:
@@ -392,7 +547,17 @@ def main() -> None:
         "search", help="Query Adzuna for postings matching target_roles/locations in config.yaml and track new ones."
     )
     p_search.add_argument("--limit", type=int, help="Results per role/location query (overrides config.yaml).")
+    p_search.add_argument("--include-stretch", action="store_true", help="Also search target_roles.stretch titles.")
+    p_search.add_argument("--include-adjacent", action="store_true", help="Also search target_roles.adjacent titles.")
     p_search.set_defaults(func=cmd_search)
+
+    p_screen = sub.add_parser(
+        "screen", help="Score a job (or all new jobs) against config.yaml's job_fit_scoring rubric."
+    )
+    p_screen.add_argument("job_id", nargs="?", help="Job id to screen. Omit and use --all to screen in bulk.")
+    p_screen.add_argument("--all", action="store_true", help="Screen every job with status 'new'.")
+    p_screen.add_argument("--force", action="store_true", help="With --all, re-screen jobs even if already screened.")
+    p_screen.set_defaults(func=cmd_screen)
 
     p_draft = sub.add_parser("draft", help="Generate tailored resume highlights + cover letter for a job.")
     p_draft.add_argument("job_id")

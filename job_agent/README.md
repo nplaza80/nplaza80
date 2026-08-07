@@ -22,6 +22,17 @@ Edit `config.yaml` (target roles, locations, preferences) and `resume.md`
 (paste your real resume as plain text/markdown). Both files are gitignored —
 your personal info never gets committed to this repo.
 
+`config.yaml` has two kinds of content:
+- **Structured fields the code reads directly:** `target_roles` (a flat list, or
+  tiers — `primary` / `stretch` / `adjacent`), `locations` (a flat list, or
+  `{preferred: [...], country: ...}`), `avoid_roles`, and `adzuna`.
+- **Everything else is free-form strategy/voice guidance** (e.g.
+  `career_objective`, `candidate_positioning`, `job_fit_scoring`,
+  `resume_strategy`, `cover_letter_strategy`, `truthfulness_rules`) that gets
+  handed to Claude as context for both screening and drafting. Add, remove, or
+  rewrite these sections however you like — see `config.example.yaml` for a
+  starting structure.
+
 Set your Anthropic API key:
 
 ```bash
@@ -42,12 +53,15 @@ export ADZUNA_APP_KEY=...
 Then, using the `target_roles`, `locations`, and `adzuna` settings in `config.yaml`:
 
 ```bash
-python apply.py search               # queries every role x location combination
-python apply.py search --limit 5     # cap results per query
+python apply.py search                     # queries target_roles.primary x locations
+python apply.py search --limit 5           # cap results per query
+python apply.py search --include-stretch   # also search target_roles.stretch titles
+python apply.py search --include-adjacent  # also search target_roles.adjacent titles
 ```
 
 New postings are added to the tracker with status `new`; postings already tracked
-(matched by Adzuna's listing id) are skipped so re-running `search` is safe.
+(matched by Adzuna's listing id) are skipped so re-running `search` is safe. Any
+posting whose title matches `avoid_roles` is filtered out automatically.
 
 ### Importing from Indeed / LinkedIn
 
@@ -104,6 +118,25 @@ List tracked jobs:
 python apply.py list
 ```
 
+### Screen postings for fit
+
+If `config.yaml` has a `job_fit_scoring` section, `screen` asks Claude to score a
+posting (0-100) and recommend `PRIORITIZE` / `APPLY` / `MAYBE` / `SKIP`, following
+your `job_fit_scoring`, `avoid_roles`, `application_priority`, `education_handling`,
+`experience_strategy`, and `truthfulness_rules` guidance:
+
+```bash
+python apply.py screen <job_id>
+python apply.py screen --all            # screen every job with status 'new'
+python apply.py screen --all --force    # re-screen everything, including already-screened jobs
+```
+
+Screened jobs move to status `screened` and show their score/recommendation in
+`python apply.py list`. This never applies or submits anything — it's purely
+triage to help you decide where to spend drafting effort.
+
+### Draft tailored materials
+
 Generate a tailored resume-highlights section + cover letter draft for a job
 (writes to `drafts/`):
 
@@ -118,7 +151,7 @@ Then update the tracker:
 python apply.py status <job_id> applied
 ```
 
-Valid statuses: `new`, `drafted`, `applied`, `interviewing`, `rejected`, `offer`.
+Valid statuses: `new`, `screened`, `drafted`, `applied`, `interviewing`, `rejected`, `offer`.
 
 ## Notes
 
@@ -127,3 +160,8 @@ Valid statuses: `new`, `drafted`, `applied`, `interviewing`, `rejected`, `offer`
   anything on your behalf.
 - Claude is instructed not to invent experience/skills/metrics that aren't
   in your real resume — always double-check the drafts before sending.
+- `screen` and `draft` both hand your entire `config.yaml` to Claude as context,
+  so any `truthfulness_rules` or `application_guardrails` you define there (e.g.
+  "never auto-answer salary/demographic/background-check questions without
+  review") are guidance for how *you* review drafts — this tool still never
+  fills out or submits an application form itself.

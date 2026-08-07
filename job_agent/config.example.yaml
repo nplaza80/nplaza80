@@ -1,24 +1,94 @@
 # Copy this file to config.yaml and fill in your own preferences.
 # config.yaml is gitignored so your personal details never get committed.
+#
+# Only candidate_name, target_roles, locations, avoid_roles, and adzuna are read
+# programmatically (by `search`/`add-job`/`screen`). Every other section is free-form
+# guidance that gets handed to Claude as context for screening and drafting - add,
+# remove, or rewrite sections freely; nothing else is schema-enforced.
 
 candidate_name: "Your Name"
 
+# What you're ultimately trying to land, and why - used as framing context for screening/drafting.
+career_objective: |
+  Looking for backend/full-stack engineering roles at small-to-mid size product companies,
+  with room to grow into a tech lead position.
+
+# Job titles to search for. Either a flat list, or tiers - `search` only queries `primary`
+# by default; pass --include-stretch / --include-adjacent to widen it.
 target_roles:
-  - "Software Engineer"
-  - "Backend Engineer"
+  primary:
+    - "Backend Engineer"
+    - "Software Engineer"
+  stretch:
+    - "Staff Engineer"
+    - "Engineering Lead"
+  adjacent:
+    - "Platform Engineer"
+
+# Titles/patterns to filter out of `search` results and warn about on manual `add-job`.
+avoid_roles:
+  - "QA Engineer"
+  - "Support Engineer"
 
 locations:
-  - "Remote"
-  - "New York, NY"
+  preferred:
+    - "Remote"
+    - "New York, NY"
+  country: "United States"
 
-# Free text describing what you're looking for / want emphasized.
-# This is fed to Claude when tailoring your resume and cover letter.
-preferences: |
-  Looking for backend/full-stack roles at small-to-mid size product companies.
-  Emphasize Python and distributed systems experience. Open to remote or NYC.
+work_arrangement:
+  remote_preference: "strong"
+  hybrid_consideration: |
+    Only consider hybrid/on-site roles if they're a clearly strong match otherwise.
 
-# Tone for the cover letter: "professional", "warm", "concise", etc.
+# Free-text positioning guidance fed into both screening and drafting prompts.
+candidate_positioning: |
+  Emphasize Python and distributed-systems experience. Comfortable with ambiguity and
+  early-stage codebases; prefers product-focused teams over pure infra roles.
+
+core_strengths:
+  technical:
+    - "Python"
+    - "Distributed systems"
+    - "API design"
+  other:
+    - "Cross-team collaboration"
+    - "Mentoring junior engineers"
+
+# How to handle degree requirements truthfully - only used as context, never fabricated.
+education_handling: |
+  Candidate holds a B.S. in Computer Science. State it plainly when relevant; do not
+  exaggerate coursework or credentials beyond what's in resume.md.
+
+# Weights/interpretation used by `screen` to compute a 0-100 fit score per posting.
+job_fit_scoring:
+  scale: "0-100"
+  weights:
+    technical_alignment: 35
+    seniority_alignment: 20
+    remote_alignment: 20
+    domain_alignment: 15
+    culture_fit_signals: 10
+  interpretation:
+    "80-100": "Strong fit - apply"
+    "60-79": "Good fit - apply if role/company is attractive"
+    "0-59": "Low fit - generally skip"
+  scoring_rules: |
+    Don't over-penalize missing a single nice-to-have technology. Penalize heavily for
+    roles requiring on-site presence, or clearly below the candidate's experience level.
+
+resume_strategy: |
+  Reorder and reframe real experience to match each posting. Mirror the posting's
+  terminology where accurate. Never fabricate technologies, dates, titles, or metrics.
+
 cover_letter_tone: "professional and concise"
+cover_letter_strategy: |
+  Keep cover letters under 350 words. Avoid generic openings like "I am excited to apply."
+  Lead with why the candidate's background maps to the problem the posting describes.
+
+truthfulness_rules:
+  - "Never invent or embellish credentials, dates, titles, or metrics."
+  - "Never claim direct experience with a tool only used adjacently."
 
 # Used by `python apply.py search` (Adzuna job search integration).
 # Get free API credentials at https://developer.adzuna.com/ and set them as
