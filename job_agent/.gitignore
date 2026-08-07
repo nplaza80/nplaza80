@@ -1,0 +1,7 @@
+config.yaml
+resume.md
+applications.json
+drafts/
+input/
+.venv/
+__pycache__/

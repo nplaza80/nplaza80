@@ -1,0 +1,21 @@
+# Copy this file to config.yaml and fill in your own preferences.
+# config.yaml is gitignored so your personal details never get committed.
+
+candidate_name: "Your Name"
+
+target_roles:
+  - "Software Engineer"
+  - "Backend Engineer"
+
+locations:
+  - "Remote"
+  - "New York, NY"
+
+# Free text describing what you're looking for / want emphasized.
+# This is fed to Claude when tailoring your resume and cover letter.
+preferences: |
+  Looking for backend/full-stack roles at small-to-mid size product companies.
+  Emphasize Python and distributed systems experience. Open to remote or NYC.
+
+# Tone for the cover letter: "professional", "warm", "concise", etc.
+cover_letter_tone: "professional and concise"
